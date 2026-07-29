@@ -153,6 +153,13 @@ export interface DisplayField {
   value: string;
 
   /**
+   * For iterated array elements whose descriptor defines a `separator`:
+   * the separator text with `{index}` substituted (e.g. "Recipient 0").
+   * Per ERC-7730, wallets MUST display it before this field when present.
+   */
+  separator?: string;
+
+  /**
    * Present when format is "calldata". The value property holds the full
    * embedded calldata as a hex string (including any prepended selector).
    * Wallets should prefer to render embeddedCalldata.display over the raw

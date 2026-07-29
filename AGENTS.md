@@ -519,7 +519,9 @@ Tests live in `test/`. Current test files:
   `rawEncryptedValue` is deliberately **not** in that list — only fields carrying an
   `encryption` annotation ever set it, so assert it in encryption tests (both on success
   and on fallback) and leave it out of the others rather than adding `undefined` checks
-  across the suite.
+  across the suite. The same applies to `separator` — only iterated array elements whose
+  descriptor defines a `separator` ever set it, so assert it (on both the elements that
+  carry it and their siblings that don't) in tests exercising separators only.
 - **Test nested `DisplayModel`s** (e.g. `embeddedCalldata.display`) with the same thoroughness.
   For calldata fields also assert `embeddedCalldata.callee` and `embeddedCalldata.chainId`.
   Extract a helper function (e.g. `assertNestedDistribute`) when the same nested structure

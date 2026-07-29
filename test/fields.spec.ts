@@ -448,7 +448,7 @@ describe("applyFieldFormats", () => {
   });
 
   describe("separator handling", () => {
-    it("does not include separator text in rendered array values", async () => {
+    it("exposes the separator as its own property and keeps rendered values clean", async () => {
       const format: DescriptorFormatSpec = {
         fields: [
           {
@@ -484,7 +484,9 @@ describe("applyFieldFormats", () => {
       const group = result.fields[0];
       assert(isFieldGroup(group));
       expect(group.fields[0].value).toBe("10");
+      expect(group.fields[0].separator).toBe("Item 0");
       expect(group.fields[1].value).toBe("20");
+      expect(group.fields[1].separator).toBe("Item 1");
       expect(result.renderedValues.get("vals.[]")).toBe("10 and 20");
       expect(result.renderedValues.get("vals")).toBe("10 and 20");
     });

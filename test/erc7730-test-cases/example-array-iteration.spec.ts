@@ -151,6 +151,7 @@ describe("example-array-iteration.json — distribute", () => {
     assert(!isFieldGroup(recipient0));
     expect(recipient0.label).toBe("Recipients");
     expect(recipient0.value).toBe(RECIPIENT_1_NAME);
+    expect(recipient0.separator).toBe("Recipient 0");
     expect(recipient0.fieldType).toBe("address");
     expect(recipient0.format).toBe("addressName");
     expect(recipient0.rawAddress).toBe(checksumRecipient1);
@@ -162,6 +163,7 @@ describe("example-array-iteration.json — distribute", () => {
     assert(!isFieldGroup(percentage0));
     expect(percentage0.label).toBe("Percentages");
     expect(percentage0.value).toBe("99.01%");
+    expect(percentage0.separator).toBeUndefined();
     expect(percentage0.fieldType).toBe("uint");
     expect(percentage0.format).toBe("unit");
     expect(percentage0.rawAddress).toBeUndefined();
@@ -174,6 +176,7 @@ describe("example-array-iteration.json — distribute", () => {
     assert(!isFieldGroup(recipient1));
     expect(recipient1.label).toBe("Recipients");
     expect(recipient1.value).toBe(RECIPIENT_2_NAME);
+    expect(recipient1.separator).toBe("Recipient 1");
     expect(recipient1.fieldType).toBe("address");
     expect(recipient1.format).toBe("addressName");
     expect(recipient1.rawAddress).toBe(checksumRecipient2);
@@ -185,6 +188,7 @@ describe("example-array-iteration.json — distribute", () => {
     assert(!isFieldGroup(percentage1));
     expect(percentage1.label).toBe("Percentages");
     expect(percentage1.value).toBe("0.99%");
+    expect(percentage1.separator).toBeUndefined();
     expect(percentage1.fieldType).toBe("uint");
     expect(percentage1.format).toBe("unit");
     expect(percentage1.rawAddress).toBeUndefined();
@@ -483,6 +487,7 @@ describe("example-array-iteration.json — batchExecute", () => {
     assert(!isFieldGroup(recipient));
     expect(recipient.label).toBe("Recipients");
     expect(recipient.value).toBe(recipientName);
+    expect(recipient.separator).toBe("Recipient 0");
     expect(recipient.fieldType).toBe("address");
     expect(recipient.format).toBe("addressName");
     expect(recipient.rawAddress).toBe(
@@ -496,6 +501,7 @@ describe("example-array-iteration.json — batchExecute", () => {
     assert(!isFieldGroup(percentage));
     expect(percentage.label).toBe("Percentages");
     expect(percentage.value).toBe("100%");
+    expect(percentage.separator).toBeUndefined();
     expect(percentage.fieldType).toBe("uint");
     expect(percentage.format).toBe("unit");
     expect(percentage.rawAddress).toBeUndefined();
@@ -547,6 +553,7 @@ describe("example-array-iteration.json — batchExecute", () => {
     assert(!isFieldGroup(calldataField));
     expect(calldataField.label).toBe("Nested Calls");
     expect(calldataField.value).toBe(`0x${INNER_DISTRIBUTE_1}`);
+    expect(calldataField.separator).toBe("Transaction 0");
     expect(calldataField.fieldType).toBe("bytes");
     expect(calldataField.format).toBe("calldata");
     expect(calldataField.rawAddress).toBeUndefined();
@@ -610,6 +617,7 @@ describe("example-array-iteration.json — batchExecute", () => {
     assert(!isFieldGroup(field0));
     expect(field0.label).toBe("Nested Calls");
     expect(field0.value).toBe(`0x${INNER_DISTRIBUTE_1}`);
+    expect(field0.separator).toBe("Transaction 0");
     expect(field0.fieldType).toBe("bytes");
     expect(field0.format).toBe("calldata");
     expect(field0.rawAddress).toBeUndefined();
@@ -632,6 +640,7 @@ describe("example-array-iteration.json — batchExecute", () => {
     assert(!isFieldGroup(field1));
     expect(field1.label).toBe("Nested Calls");
     expect(field1.value).toBe(`0x${INNER_DISTRIBUTE_2}`);
+    expect(field1.separator).toBe("Transaction 1");
     expect(field1.fieldType).toBe("bytes");
     expect(field1.format).toBe("calldata");
     expect(field1.rawAddress).toBeUndefined();

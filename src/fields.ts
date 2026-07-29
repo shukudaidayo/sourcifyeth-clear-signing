@@ -286,9 +286,21 @@ async function processSingleField(
     rawAddress,
   } = renderResult;
 
+  // Resolve the separator for array elements (e.g. "Recipient {index}" →
+  // "Recipient 0"). Exposed on the DisplayField for wallets to display
+  // before the field; kept out of value and renderedValues.
+  let separator: string | undefined;
+  if (merged.separator && merged.path) {
+    const indexMatch = merged.path.match(/\.\[(\d+)\]/);
+    if (indexMatch) {
+      separator = merged.separator.replace("{index}", indexMatch[1]);
+    }
+  }
+
   const displayField: DisplayField = {
     label: merged.label,
     value: rendered,
+    ...(separator && { separator }),
     fieldType: argValue.type,
     format: merged.format,
     warning: fieldWarning,

@@ -285,6 +285,12 @@ interface DisplayField {
   label: string; // UI label, e.g. "Amount to approve"
   value: string; // Pre-formatted display value, e.g. "1 USDC"
 
+  // For iterated array elements whose descriptor defines a `separator`:
+  // the separator text with `{index}` substituted (e.g. "Recipient 0").
+  // When present, it MUST be displayed before this field (per ERC-7730) —
+  // e.g. as a sub-heading between array elements.
+  separator?: string;
+
   // `fieldType` (the underlying Solidity type) and `format` (the ERC-7730
   // display format, e.g. "tokenAmount") drive type-specific UI components.
   // For example, for a `fieldType` of "address" the wallet can display an

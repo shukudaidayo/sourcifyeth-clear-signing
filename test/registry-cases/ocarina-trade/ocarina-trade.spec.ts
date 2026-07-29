@@ -154,11 +154,8 @@ describe("Ocarina OTCRegistry TipAuthorization", () => {
 
     expect(result.intent).toBe("Authorize tip");
     // The child array path {tips.[].amount} joins the rendered values of
-    // all tip amounts. The separator prefix is currently part of the
-    // rendered values.
-    expect(result.interpolatedIntent).toBe(
-      "Authorize Tip 0 1 USDC and Tip 1 2 ETH tip",
-    );
+    // all tip amounts. Separators are not part of the rendered values.
+    expect(result.interpolatedIntent).toBe("Authorize 1 USDC and 2 ETH tip");
 
     assert(result.fields);
     // The top-level `tips.[]` field and `orderHash` are never visible.
@@ -175,7 +172,8 @@ describe("Ocarina OTCRegistry TipAuthorization", () => {
 
     const tip0Amount = tipsGroup.fields[0];
     expect(tip0Amount.label).toBe("Tip amount");
-    expect(tip0Amount.value).toBe("Tip 0 1 USDC");
+    expect(tip0Amount.value).toBe("1 USDC");
+    expect(tip0Amount.separator).toBe("Tip 0");
     expect(tip0Amount.fieldType).toBe("uint");
     expect(tip0Amount.format).toBe("tokenAmount");
     expect(tip0Amount.tokenAddress).toBe(USDC_ADDRESS);
@@ -186,6 +184,7 @@ describe("Ocarina OTCRegistry TipAuthorization", () => {
     const tip0Recipient = tipsGroup.fields[1];
     expect(tip0Recipient.label).toBe("Tip to");
     expect(tip0Recipient.value).toBe("alice.eth");
+    expect(tip0Recipient.separator).toBeUndefined();
     expect(tip0Recipient.fieldType).toBe("address");
     expect(tip0Recipient.format).toBe("addressName");
     expect(tip0Recipient.rawAddress).toBe(RECIPIENT_A);
@@ -195,7 +194,8 @@ describe("Ocarina OTCRegistry TipAuthorization", () => {
 
     const tip1Amount = tipsGroup.fields[2];
     expect(tip1Amount.label).toBe("Tip amount");
-    expect(tip1Amount.value).toBe("Tip 1 2 ETH");
+    expect(tip1Amount.value).toBe("2 ETH");
+    expect(tip1Amount.separator).toBe("Tip 1");
     expect(tip1Amount.fieldType).toBe("uint");
     expect(tip1Amount.format).toBe("tokenAmount");
     expect(tip1Amount.tokenAddress).toBe(NATIVE_ADDRESS);
@@ -206,6 +206,7 @@ describe("Ocarina OTCRegistry TipAuthorization", () => {
     const tip1Recipient = tipsGroup.fields[3];
     expect(tip1Recipient.label).toBe("Tip to");
     expect(tip1Recipient.value).toBe("bob.eth");
+    expect(tip1Recipient.separator).toBeUndefined();
     expect(tip1Recipient.fieldType).toBe("address");
     expect(tip1Recipient.format).toBe("addressName");
     expect(tip1Recipient.rawAddress).toBe(RECIPIENT_B);
