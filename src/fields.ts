@@ -50,12 +50,6 @@ import { renderField } from "./formatters.js";
 /** Callback to get the length of an array at a given container path. */
 export type GetArrayLength = (path: string) => number;
 
-interface ArrayPath {
-  path: string;
-  basePath: string;
-  length: number;
-}
-
 /** Shared context threaded through all internal processing functions. */
 interface FieldContext {
   definitions: Record<string, DescriptorFieldFormat>;
@@ -138,8 +132,9 @@ async function processArrayField(
   fieldSpec: DescriptorFieldFormat,
   ctx: FieldContext,
 ): Promise<{ group: DisplayFieldGroup } | { warnings: Warning[] }> {
-  const fieldArrayPaths = [buildArrayPath(fieldSpec.path, ctx)];
-  const { basePath, length } = fieldArrayPaths[0];
+  const basePath = parseGroupBasePath(fieldSpec.path);
+  const length = ctx.getArrayLength(basePath);
+  const fieldArrayPaths = [{ path: fieldSpec.path, length }];
 
   const paramMismatch = checkParamArrayLengths(
     [fieldSpec],
@@ -326,7 +321,16 @@ async function processChildArrayPaths(
   ctx: FieldContext,
 ): Promise<{ group: DisplayFieldGroup } | { warnings: Warning[] }> {
   const childFields = group.fields ?? [];
-  const arrayPaths = collectChildArrayPaths(childFields, ctx);
+  const arrayPaths: { path: string; length: number }[] = [];
+  for (const child of childFields) {
+    if (!isFieldGroup(child) && child.path?.includes(".[]")) {
+      const childBasePath = parseGroupBasePath(child.path);
+      arrayPaths.push({
+        path: child.path,
+        length: ctx.getArrayLength(childBasePath),
+      });
+    }
+  }
 
   // Per ERC-7730: when a field param references an array path, it must have
   // the same length as the field's own array path.
@@ -346,7 +350,7 @@ async function processChildArrayPaths(
     const first = lengths[0];
     if (lengths.some((l) => l !== first)) {
       const detail = arrayPaths
-        .map((a) => `${a.basePath}=${a.length}`)
+        .map((a) => `${parseGroupBasePath(a.path)}=${a.length}`)
         .join(", ");
       return {
         warnings: [
@@ -388,9 +392,8 @@ async function processChildArrayPaths(
     }
 
     if (child.path?.includes(".[]")) {
-      const len =
-        arrayPaths.find((arrayPath) => arrayPath.path === child.path)?.length ??
-        ctx.getArrayLength(parseGroupBasePath(child.path));
+      const childBasePath = parseGroupBasePath(child.path);
+      const len = ctx.getArrayLength(childBasePath);
       const iterResult = await iterateArrayField(child, len, ctx);
       if ("warnings" in iterResult) return iterResult;
       allFields.push(...iterResult.fields);
@@ -444,31 +447,6 @@ function groupHasArrayChildren(group: DescriptorFieldGroup): boolean {
     if (!isFieldGroup(child) && child.path?.includes(".[]")) return true;
   }
   return false;
-}
-
-function collectChildArrayPaths(
-  childFields: (DescriptorFieldFormat | DescriptorFieldGroup)[],
-  ctx: FieldContext,
-): ArrayPath[] {
-  const arrayPaths: ArrayPath[] = [];
-  for (const child of childFields) {
-    if (!isFieldGroup(child) && child.path?.includes(".[]")) {
-      arrayPaths.push(buildArrayPath(child.path, ctx));
-    }
-  }
-  return arrayPaths;
-}
-
-function buildArrayPath(
-  path: string | undefined,
-  ctx: FieldContext,
-): ArrayPath {
-  const basePath = parseGroupBasePath(path);
-  return {
-    path: path ?? basePath,
-    basePath,
-    length: ctx.getArrayLength(basePath),
-  };
 }
 
 /**
@@ -589,10 +567,11 @@ function expandParamArrayIndex(
  * base path (e.g. "recipients") for descriptor compatibility.
  */
 function joinArrayValues(
-  arrayPaths: ArrayPath[],
+  arrayPaths: { path: string | undefined; length: number }[],
   renderedValues: Map<string, string>,
 ): void {
   for (const { path, length } of arrayPaths) {
+    if (!path) continue;
     const wildcardPath = stripStructuredRootPrefix(path);
     const parts: string[] = [];
     for (let i = 0; i < length; i++) {
@@ -616,14 +595,14 @@ function joinArrayValues(
  */
 function checkParamArrayLengths(
   childFields: (DescriptorFieldFormat | DescriptorFieldGroup)[],
-  fieldArrayPaths: ArrayPath[],
+  fieldArrayPaths: { path: string | undefined; length: number }[],
   ctx: FieldContext,
 ): Warning | undefined {
   for (const child of childFields) {
     if (isFieldGroup(child) || !child.path?.includes(".[]")) continue;
     const childBasePath = parseGroupBasePath(child.path);
     const fieldLength = fieldArrayPaths.find(
-      (arrayPath) => arrayPath.basePath === childBasePath,
+      (a) => parseGroupBasePath(a.path) === childBasePath,
     )?.length;
     if (fieldLength === undefined) continue;
 
