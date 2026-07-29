@@ -11,15 +11,17 @@ import {
   bytesSliceToArgumentValue,
   bytesSliceToFieldType,
   parseByteSlice,
+  parsePlaintextType,
 } from "../src/fields.js";
 import type { ArgumentValue, BaseResolvePath } from "../src/descriptor.js";
 import { stripStructuredRootPrefix } from "../src/descriptor.js";
 import type {
+  DescriptorFieldEncryption,
   DescriptorFieldFormat,
   DescriptorFieldGroup,
   DescriptorFormatSpec,
 } from "../src/types.js";
-import { hexToBytes, isFieldGroup } from "../src/utils.js";
+import { hexToBytes, isFieldGroup, toChecksumAddress } from "../src/utils.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -765,6 +767,471 @@ describe("applyFieldFormats", () => {
     });
   });
 
+  describe("parsePlaintextType", () => {
+    it("maps canonical Solidity value types to field types and widths", () => {
+      expect(parsePlaintextType("bool")).toEqual({
+        fieldType: "bool",
+        maxBytes: 1,
+      });
+      expect(parsePlaintextType("address")).toEqual({
+        fieldType: "address",
+        maxBytes: 20,
+      });
+      expect(parsePlaintextType("uint8")).toEqual({
+        fieldType: "uint",
+        maxBytes: 1,
+      });
+      expect(parsePlaintextType("uint64")).toEqual({
+        fieldType: "uint",
+        maxBytes: 8,
+      });
+      expect(parsePlaintextType("uint256")).toEqual({
+        fieldType: "uint",
+        maxBytes: 32,
+      });
+      expect(parsePlaintextType("int8")).toEqual({
+        fieldType: "int",
+        maxBytes: 1,
+      });
+      expect(parsePlaintextType("int256")).toEqual({
+        fieldType: "int",
+        maxBytes: 32,
+      });
+      expect(parsePlaintextType("bytes1")).toEqual({
+        fieldType: "bytes",
+        maxBytes: 1,
+      });
+      expect(parsePlaintextType("bytes32")).toEqual({
+        fieldType: "bytes",
+        maxBytes: 32,
+      });
+    });
+
+    it("leaves the dynamic types unbounded", () => {
+      expect(parsePlaintextType("bytes")).toEqual({ fieldType: "bytes" });
+      expect(parsePlaintextType("string")).toEqual({ fieldType: "string" });
+    });
+
+    it("rejects non-canonical and invalid types", () => {
+      // "uint" / "int" aliases are not canonical Solidity per the ERC-7730 spec
+      expect(parsePlaintextType("uint")).toBeUndefined();
+      expect(parsePlaintextType("int")).toBeUndefined();
+      // Widths must be multiples of 8, and byte lengths within 1..32
+      expect(parsePlaintextType("uint7")).toBeUndefined();
+      expect(parsePlaintextType("uint512")).toBeUndefined();
+      expect(parsePlaintextType("bytes0")).toBeUndefined();
+      expect(parsePlaintextType("bytes33")).toBeUndefined();
+      expect(parsePlaintextType("euint64")).toBeUndefined();
+      expect(parsePlaintextType("")).toBeUndefined();
+    });
+  });
+
+  describe("encryption (end-to-end via applyFieldFormats)", () => {
+    const HANDLE =
+      "0xabcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
+    const CONTRACT = "0x1111111111111111111111111111111111111111";
+
+    /** A field whose bytes32 value is an fhevm ciphertext handle. */
+    function encryptedField(
+      encryption: DescriptorFieldFormat["encryption"],
+    ): DescriptorFormatSpec {
+      return {
+        fields: [
+          { path: "amount", label: "Amount", format: "raw", encryption },
+        ],
+      };
+    }
+
+    const FHEVM_UINT64: DescriptorFieldEncryption = {
+      scheme: "fhevm",
+      plaintextType: "uint64",
+      fallbackLabel: "[Encrypted Amount]",
+    };
+
+    const resolvePath = mapResolvePath({
+      amount: { type: "bytes", bytes: hexToBytes(HANDLE) },
+      "@.to": ADDR(CONTRACT),
+    });
+
+    it("decrypts a value and re-interprets it as the declared plaintextType", async () => {
+      const result = await applyFieldFormats(
+        encryptedField(FHEVM_UINT64),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        {
+          resolveDecryptedValue: async () => ({ value: "0x00000000000f4240" }),
+        },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("1000000");
+      expect(field.fieldType).toBe("uint");
+      expect(field.warning).toBeUndefined();
+      // Reported even on success, so the wallet can show the encrypted value
+      // next to the plaintext.
+      expect(field.rawEncryptedValue).toBe(HANDLE);
+      // The decrypted plaintext, not the handle, feeds interpolation
+      expect(result.renderedValues.get("amount")).toBe("1000000");
+    });
+
+    it("leaves rawEncryptedValue unset on fields with no encryption annotation", async () => {
+      const result = await applyFieldFormats(
+        { fields: [{ path: "amount", label: "Amount", format: "raw" }] },
+        {},
+        mapResolvePath({ amount: UINT(42n) }),
+        mapArrayLength({}),
+        1,
+        undefined,
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.rawEncryptedValue).toBeUndefined();
+    });
+
+    it("passes the handle, scheme and container `@.to` to the wallet", async () => {
+      const calls: unknown[] = [];
+      await applyFieldFormats(
+        encryptedField(FHEVM_UINT64),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        137,
+        undefined,
+        {
+          resolveDecryptedValue: async (chainId, encryptedValue, params) => {
+            calls.push([chainId, encryptedValue, params]);
+            return { value: "0x01" };
+          },
+        },
+      );
+
+      expect(calls).toEqual([
+        [
+          137,
+          HANDLE,
+          {
+            scheme: "fhevm",
+            contractAddress: toChecksumAddress(hexToBytes(CONTRACT)),
+          },
+        ],
+      ]);
+    });
+
+    it("omits contractAddress when the container has no `@.to`", async () => {
+      const calls: unknown[] = [];
+      await applyFieldFormats(
+        encryptedField(FHEVM_UINT64),
+        {},
+        mapResolvePath({
+          amount: { type: "bytes", bytes: hexToBytes(HANDLE) },
+        }),
+        mapArrayLength({}),
+        1,
+        undefined,
+        {
+          resolveDecryptedValue: async (_chainId, _encryptedValue, params) => {
+            calls.push(params);
+            return { value: "0x01" };
+          },
+        },
+      );
+
+      expect(calls).toEqual([{ scheme: "fhevm", contractAddress: undefined }]);
+    });
+
+    it("renders the fallbackLabel with DECRYPTION_FAILED when no provider is given", async () => {
+      const result = await applyFieldFormats(
+        encryptedField(FHEVM_UINT64),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("[Encrypted Amount]");
+      expect(field.fieldType).toBe("bytes");
+      expect(field.format).toBe("raw");
+      expect(field.warning?.code).toBe("DECRYPTION_FAILED");
+      // ERC-7730 recommends showing the raw value beside the placeholder
+      expect(field.rawEncryptedValue).toBe(HANDLE);
+    });
+
+    it("renders the fallbackLabel when the wallet cannot decrypt", async () => {
+      const result = await applyFieldFormats(
+        encryptedField(FHEVM_UINT64),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        { resolveDecryptedValue: async () => null },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("[Encrypted Amount]");
+      expect(field.warning?.code).toBe("DECRYPTION_FAILED");
+    });
+
+    it("falls back to a generic placeholder when the descriptor declares no fallbackLabel", async () => {
+      const result = await applyFieldFormats(
+        encryptedField({ scheme: "fhevm", plaintextType: "uint64" }),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        { resolveDecryptedValue: async () => null },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      // Never the ciphertext — that would read as if it were the value. The
+      // raw value is still available on rawEncryptedValue.
+      expect(field.value).toBe("[Encrypted]");
+      expect(field.rawEncryptedValue).toBe(HANDLE);
+      expect(field.warning?.code).toBe("DECRYPTION_FAILED");
+    });
+
+    it("reports DECRYPTION_FAILED when the plaintext is too wide for its type", async () => {
+      const result = await applyFieldFormats(
+        encryptedField(FHEVM_UINT64),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        // 9 significant bytes cannot be a uint64 — rendering it would show a
+        // wildly wrong amount rather than a wrong-looking one.
+        {
+          resolveDecryptedValue: async () => ({
+            value: "0x01ffffffffffffffff",
+          }),
+        },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("[Encrypted Amount]");
+      expect(field.warning?.code).toBe("DECRYPTION_FAILED");
+    });
+
+    it("accepts a zero-padded plaintext whose value fits the type", async () => {
+      const result = await applyFieldFormats(
+        encryptedField(FHEVM_UINT64),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        // A wallet handing back the full 32-byte ABI word is fine: leading
+        // zeros carry no value for an integer.
+        {
+          resolveDecryptedValue: async () => ({
+            value: `0x${"00".repeat(29)}0f4240`,
+          }),
+        },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("1000000");
+      expect(field.warning).toBeUndefined();
+    });
+
+    it("rejects a bytesN plaintext wider than the declared size", async () => {
+      const result = await applyFieldFormats(
+        encryptedField({
+          scheme: "fhevm",
+          plaintextType: "bytes4",
+          fallbackLabel: "[Encrypted Amount]",
+        }),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        // Unlike integers, every byte of a bytesN is part of the value, so
+        // leading zeros do not make this fit.
+        { resolveDecryptedValue: async () => ({ value: "0x00cafebabe" }) },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("[Encrypted Amount]");
+      expect(field.warning?.code).toBe("DECRYPTION_FAILED");
+    });
+
+    // The declared width, not the returned length, decides where a signed
+    // value's sign bit sits — otherwise a minimally-encoded positive whose top
+    // bit happens to be set would render as a negative number.
+    it("interprets a signed plaintext at its declared width, not the returned length", async () => {
+      const asInt64 = async (value: string) => {
+        const result = await applyFieldFormats(
+          encryptedField({ scheme: "fhevm", plaintextType: "int64" }),
+          {},
+          resolvePath,
+          mapArrayLength({}),
+          1,
+          undefined,
+          { resolveDecryptedValue: async () => ({ value }) },
+        );
+        assert(!("warnings" in result));
+        const field = result.fields[0];
+        assert(!isFieldGroup(field));
+        return field;
+      };
+
+      // 200 minimally encoded is 0xc8, whose top bit is set. Read at 8 bits it
+      // would be -56; at the declared 64 it is 200.
+      expect((await asInt64("0xc8")).value).toBe("200");
+      expect((await asInt64("0x00000000000000c8")).value).toBe("200");
+      // Small positives were never affected.
+      expect((await asInt64("0x0a")).value).toBe("10");
+      // Negatives are returned at the full declared width.
+      expect((await asInt64("0xffffffffffffffff")).value).toBe("-1");
+      expect((await asInt64("0xffffffffffffff38")).value).toBe("-200");
+      // fieldType still reports the declared category
+      expect((await asInt64("0xc8")).fieldType).toBe("int");
+    });
+
+    it("keeps a narrower signed type's own width", async () => {
+      const result = await applyFieldFormats(
+        encryptedField({ scheme: "fhevm", plaintextType: "int8" }),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        { resolveDecryptedValue: async () => ({ value: "0xff" }) },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("-1");
+    });
+
+    it("reports DECRYPTION_FAILED when the wallet returns invalid hex", async () => {
+      const result = await applyFieldFormats(
+        encryptedField(FHEVM_UINT64),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        // Odd-length hex — the `"0x" + n.toString(16)` bug
+        { resolveDecryptedValue: async () => ({ value: "0xf4240" }) },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("[Encrypted Amount]");
+      expect(field.warning?.code).toBe("DECRYPTION_FAILED");
+    });
+
+    // A malformed `encryption` annotation is a descriptor bug rather than a
+    // decryption outcome, so it aborts the format instead of falling back.
+    it("fails with INVALID_DESCRIPTOR for an unsupported plaintextType", async () => {
+      const result = await applyFieldFormats(
+        encryptedField({
+          scheme: "fhevm",
+          plaintextType: "euint64",
+          fallbackLabel: "[Encrypted Amount]",
+        }),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        { resolveDecryptedValue: async () => ({ value: "0x0f4240" }) },
+      );
+
+      assert("warnings" in result);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0].code).toBe("INVALID_DESCRIPTOR");
+      expect(result.warnings[0].message).toContain("euint64");
+    });
+
+    it("fails with INVALID_DESCRIPTOR when scheme or plaintextType is missing", async () => {
+      const result = await applyFieldFormats(
+        encryptedField({ plaintextType: "uint64" }),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        { resolveDecryptedValue: async () => ({ value: "0x0f4240" }) },
+      );
+
+      assert("warnings" in result);
+      expect(result.warnings[0].code).toBe("INVALID_DESCRIPTOR");
+    });
+
+    it("reports DECRYPTION_FAILED when the container has no chainId", async () => {
+      const result = await applyFieldFormats(
+        encryptedField(FHEVM_UINT64),
+        {},
+        resolvePath,
+        mapArrayLength({}),
+        undefined,
+        undefined,
+        { resolveDecryptedValue: async () => ({ value: "0x0f4240" }) },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("[Encrypted Amount]");
+      expect(field.warning?.code).toBe("DECRYPTION_FAILED");
+    });
+
+    it("resolves `encryption` through a $ref definition", async () => {
+      const result = await applyFieldFormats(
+        {
+          fields: [{ path: "amount", $ref: "$.display.definitions.encAmount" }],
+        },
+        {
+          encAmount: {
+            label: "Amount",
+            format: "raw",
+            encryption: FHEVM_UINT64,
+          },
+        },
+        resolvePath,
+        mapArrayLength({}),
+        1,
+        undefined,
+        {
+          resolveDecryptedValue: async () => ({ value: "0x00000000000f4240" }),
+        },
+      );
+
+      assert(!("warnings" in result));
+      const field = result.fields[0];
+      assert(!isFieldGroup(field));
+      expect(field.value).toBe("1000000");
+      expect(field.warning).toBeUndefined();
+    });
+  });
+
   describe("renderedValues for interpolation", () => {
     it("stores rendered values keyed by path", async () => {
       const format: DescriptorFormatSpec = {
@@ -790,6 +1257,40 @@ describe("applyFieldFormats", () => {
       assert(!("warnings" in result));
       expect(result.renderedValues.get("a")).toBe("1");
       expect(result.renderedValues.get("b")).toBe("hello");
+    });
+
+    it("stores joined rendered values for child array paths", async () => {
+      const format: DescriptorFormatSpec = {
+        fields: [
+          {
+            label: "Items",
+            iteration: "bundled",
+            fields: [
+              { path: "items.[].name", label: "Name", format: "raw" },
+              { path: "items.[].amount", label: "Amount", format: "raw" },
+            ],
+          } as DescriptorFieldGroup,
+        ],
+      };
+      const resolvePath = mapResolvePath({
+        "items.[0].name": { type: "string", value: "Alice" },
+        "items.[0].amount": UINT(1n),
+        "items.[1].name": { type: "string", value: "Bob" },
+        "items.[1].amount": UINT(2n),
+      });
+
+      const result = await applyFieldFormats(
+        format,
+        {},
+        resolvePath,
+        mapArrayLength({ items: 2 }),
+        1,
+        undefined,
+      );
+
+      assert(!("warnings" in result));
+      expect(result.renderedValues.get("items.[].name")).toBe("Alice and Bob");
+      expect(result.renderedValues.get("items.[].amount")).toBe("1 and 2");
     });
   });
 });
